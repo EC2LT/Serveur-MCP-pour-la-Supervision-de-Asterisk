@@ -1,84 +1,40 @@
-import requests
+# server.py
+import os
+import logging
 from fastmcp import FastMCP
+
+from config.logging_config import setup_logging
+from security.auth import authenticate_with_token
+from security.context import get_current_token
+from tools import register_all_tools
+
+# --- Initialisation ---
+setup_logging()
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP("Asterisk-Supervisor-MCP")
 
-ARI_URL = "http://localhost:8088/ari"
-AUTH = ("mcp_user", "mcp_secret_password")  # Identifiants ari.conf
 
-@mcp.tool()
-def get_asterisk_info() -> dict:
-    """Récupère les informations système générales du serveur Asterisk."""
-    url = f"{ARI_URL}/asterisk/info"
-    response = requests.get(url, auth=AUTH)
-    return response.json() if response.status_code == 200 else {"error": response.text}
+# --- Authentification au démarrage ---
+def _init_auth():
+    """Récupère le token depuis l'environnement (transmis par l'agent)."""
+    token = os.getenv("MCP_AUTH_TOKEN")
+    if token:
+        try:
+            user = authenticate_with_token(token)
+            logger.info(f"Authentifié : {user.username} (rôles: {user.roles})")
+        except Exception as e:
+            logger.error(f"Échec authentification : {e}")
+    else:
+        logger.warning("Aucun token fourni. Les outils protégés échoueront.")
 
-@mcp.tool()
-def list_active_channels() -> list:
-    """Liste tous les canaux/appels actuellement actifs sur Asterisk."""
-    url = f"{ARI_URL}/channels"
-    response = requests.get(url, auth=AUTH)
-    return response.json() if response.status_code == 200 else []
 
-@mcp.tool()
-def list_endpoints() -> list:
-    """Liste tous les comptes SIP / PJSIP configurés sur le serveur Asterisk."""
-    url = f"{ARI_URL}/endpoints"
-    try:
-        response = requests.get(url, auth=AUTH)
-        if response.status_code == 200:
-            endpoints_data = response.json()
-            formatted_endpoints = []
-            
-            for ep in endpoints_data:
-                # Filtrer ou formater proprement chaque endpoint
-                formatted_endpoints.append({
-                    "technology": ep.get("technology", "N/A"),
-                    "resource": ep.get("resource", "N/A"),
-                    "state": ep.get("state", "unknown"),
-                    "channel_ids": ep.get("channel_ids", [])
-                })
-            return formatted_endpoints
-        else:
-            return [{"error": f"Erreur ARI {response.status_code}: {response.text}"}]
-    except Exception as e:
-        return [{"error": str(e)}]
+_init_auth()
 
-@mcp.tool()
-def make_call(endpoint: str, extension: str, context: str = "default") -> dict:
-    """Initie un appel depuis un endpoint SIP vers une extension spécifiée."""
-    url = f"{ARI_URL}/channels"
-    params = {
-        "endpoint": f"PJSIP/{endpoint}",
-        "extension": extension,
-        "context": context,
-        "priority": 1
-    }
-    response = requests.post(url, auth=AUTH, params=params)
-    return response.json() if response.status_code == 200 else {"error": response.text}
+# --- Enregistrement des outils ---
+register_all_tools(mcp)
 
-@mcp.tool()
-def hangup_channel(channel_id: str) -> dict:
-    """Raccroche/Termine un canal actif par son identifiant unique."""
-    url = f"{ARI_URL}/channels/{channel_id}"
-    response = requests.delete(url, auth=AUTH)
-    return {"status": "success"} if response.status_code == 204 else {"error": response.text}
-
-@mcp.tool()
-def get_queue_stats() -> dict:
-    """Récupère l'état et la liste des files d'attente (Queues)."""
-    # Implémentation indicative selon vos modules
-    return {"status": "active", "queues": []}
-
-@mcp.tool()
-def analyze_call_quality(channel_id: str) -> dict:
-    """Analyse la qualité globale d'une communication (Simulé/ARI Stats)."""
-    return {"channel_id": channel_id, "mos_score": 4.2, "jitter": "12ms", "packet_loss": "0.1%"}
-
-@mcp.tool()
-def spy_channel(channel_id: str, spy_type: str = "listen") -> dict:
-    """Active l'écoute discrète (Chanspy) sur un canal."""
-    return {"status": "spy_initiated", "target": channel_id, "type": spy_type}
 
 if __name__ == "__main__":
+    logger.info("Démarrage du serveur MCP Asterisk...")
     mcp.run(transport="stdio")
